@@ -1,0 +1,45 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
+  DEPLOY_HOST: "34.51.208.102"
+  DEPLOY_USER: "root"
+  COMPOSE_FILE_PATH: "/root/docker-compose.yml"
+  COMPOSE_SERVICE: "main_api"
+
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+  script:
+    - docker build -t "$IMAGE_TAG" -t "$IMAGE_LATEST" .
+    - docker push "$IMAGE_TAG"
+    - docker push "$IMAGE_LATEST"
+
+deploy:
+  stage: deploy
+  image: alpine:3.20
+  needs: ["build"]
+  before_script:
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - cp "$SSH_PRIVATE_KEY" ~/.ssh/id_deploy 2>/dev/null || echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+    - chmod 600 ~/.ssh/id_deploy
+    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - |
+      ssh -i ~/.ssh/id_deploy "$DEPLOY_USER@$DEPLOY_HOST" "
+        set -e
+        printf '%s' '$DEPLOY_TOKEN_PASSWORD' | docker login '$CI_REGISTRY' -u '$DEPLOY_TOKEN_USER' --password-stdin
+        docker compose -f '$COMPOSE_FILE_PATH' pull '$COMPOSE_SERVICE'
+        docker compose -f '$COMPOSE_FILE_PATH' up -d '$COMPOSE_SERVICE'
+        docker image prune -af --filter 'until=12h' || true
+      "

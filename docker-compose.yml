@@ -32,6 +32,35 @@ services:
       kafka:
         condition: service_healthy
 
+  worker:
+    build: ../worker
+    ports:
+      - "8001:8001"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: daddb
+      POSTGRES_USER: daduser
+      POSTGRES_PASSWORD: dadpass
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      MONGO_DB: daddb
+      MONGO_USER: daduser
+      MONGO_PASSWORD: dadpass
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USER: elastic
+      ELASTICSEARCH_PASSWORD: dadpass
+      ELASTICSEARCH_VERIFY_CERTS: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      KAFKA_CONSUMER_GROUP_ID: worker
+      KAFKA_AUTO_OFFSET_RESET: earliest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:

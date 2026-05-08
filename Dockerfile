@@ -14,4 +14,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["startup.sh"]
+CMD ["bash", "/app/startup.sh"]

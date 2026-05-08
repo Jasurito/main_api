@@ -1,5 +1,17 @@
-FROM python:3.12
-COPY . /app
+FROM python:3.12-slim
+
+RUN useradd --create-home appuser
+
 WORKDIR /app
-RUN pip install -r requirements.txt
-CMD [ "startup.sh" ]
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["startup.sh"]

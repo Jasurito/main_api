@@ -5,3 +5,7 @@ motor>=3.4.0
 elasticsearch[async]>=8.13.0
 aiokafka>=0.11.0
 python-dotenv>=1.0.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1
+email-validator>=2.0.0

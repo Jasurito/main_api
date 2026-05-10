@@ -9,19 +9,28 @@ services:
       POSTGRES_DB: daddb
       POSTGRES_USER: daduser
       POSTGRES_PASSWORD: dadpass
+
       MONGO_HOST: mongo
       MONGO_PORT: 27017
       MONGO_DB: daddb
       MONGO_USER: daduser
       MONGO_PASSWORD: dadpass
+
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       ELASTICSEARCH_USER: elastic
       ELASTICSEARCH_PASSWORD: dadpass
       ELASTICSEARCH_VERIFY_CERTS: "false"
+
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_SECURITY_PROTOCOL: PLAINTEXT
       KAFKA_CONSUMER_GROUP_ID: main-api
       KAFKA_AUTO_OFFSET_RESET: earliest
+      KAFKA_USER_EVENTS_TOPIC: user-events
+
+      JWT_SECRET_KEY: test-secret-change-later
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 60
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,19 +51,24 @@ services:
       POSTGRES_DB: daddb
       POSTGRES_USER: daduser
       POSTGRES_PASSWORD: dadpass
+
       MONGO_HOST: mongo
       MONGO_PORT: 27017
       MONGO_DB: daddb
       MONGO_USER: daduser
       MONGO_PASSWORD: dadpass
+
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       ELASTICSEARCH_USER: elastic
       ELASTICSEARCH_PASSWORD: dadpass
       ELASTICSEARCH_VERIFY_CERTS: "false"
+
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_SECURITY_PROTOCOL: PLAINTEXT
       KAFKA_CONSUMER_GROUP_ID: worker
       KAFKA_AUTO_OFFSET_RESET: earliest
+      KAFKA_USER_REGISTERED_TOPIC: user.registered
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,19 +120,16 @@ services:
   kafka:
     image: apache/kafka:3.7.0
     environment:
-      # KRaft identity
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       CLUSTER_ID: dad-local-cluster
 
-      # Listener definitions: one for clients, one for inter-controller Raft traffic
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
 
-      # Single-node replication factors
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1

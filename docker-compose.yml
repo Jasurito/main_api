@@ -26,10 +26,20 @@ services:
       KAFKA_CONSUMER_GROUP_ID: main-api
       KAFKA_AUTO_OFFSET_RESET: earliest
       KAFKA_USER_EVENTS_TOPIC: user-events
+      KAFKA_PRODUCT_EVENTS_TOPIC: product-events
+      KAFKA_CART_EVENTS_TOPIC: cart-events
+      KAFKA_ORDER_EVENTS_TOPIC: order-events
 
       JWT_SECRET_KEY: test-secret-change-later
       JWT_ALGORITHM: HS256
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 60
+
+      STORAGE_ENDPOINT: http://rustfs:9000
+      STORAGE_ACCESS_KEY: daduser
+      STORAGE_SECRET_KEY: dadpass
+      STORAGE_BUCKET: dad-storage
+      # client-facing URL (host-side); used to build image URLs returned to users
+      STORAGE_BASE_URL: http://localhost:9000/dad-storage
 
     depends_on:
       postgres:
@@ -40,6 +50,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      rustfs:
+        condition: service_started
 
   worker:
     build: ../worker
@@ -68,6 +80,15 @@ services:
       KAFKA_CONSUMER_GROUP_ID: worker
       KAFKA_AUTO_OFFSET_RESET: earliest
       KAFKA_USER_REGISTERED_TOPIC: user.registered
+
+      STORAGE_ENDPOINT: http://rustfs:9000
+      STORAGE_ACCESS_KEY: daduser
+      STORAGE_SECRET_KEY: dadpass
+      STORAGE_BUCKET: dad-storage
+
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: changeme
+      ADMIN_FULL_NAME: Admin
 
     depends_on:
       postgres:
@@ -144,8 +165,21 @@ services:
       retries: 20
       start_period: 30s
 
+  rustfs:
+    image: rustfs/rustfs
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: daduser
+      RUSTFS_SECRET_KEY: dadpass
+    volumes:
+      - rustfs_data:/data
+    command: server /data --console-address ":9001"
+
 volumes:
   postgres_data:
   mongo_data:
   elasticsearch_data:
   kafka_data:
+  rustfs_data:

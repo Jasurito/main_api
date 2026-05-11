@@ -105,6 +105,8 @@ services:
 
   elasticsearch:
     image: elasticsearch:8.13.4
+    ports:
+      - "9200:9200"
     environment:
       discovery.type: single-node
       ELASTIC_PASSWORD: dadpass

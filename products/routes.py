@@ -176,27 +176,39 @@ async def search_products(
 async def product_quantity_ws(product_id: int, websocket: WebSocket):
     await websocket.accept()
     pool = await postgres.get_pool()
-    last_quantity = None
 
-    try:
-        while True:
-            async with pool.acquire() as conn:
-                quantity = await conn.fetchval(
-                    "SELECT quantity FROM products WHERE product_id = $1",
-                    product_id,
-                )
+    async with pool.acquire() as conn:
+        quantity = await conn.fetchval(
+            "SELECT quantity FROM products WHERE product_id = $1", product_id
+        )
 
-            if quantity is None:
-                await websocket.send_json({"error": "Product not found", "product_id": product_id})
-                break
+    if quantity is None:
+        await websocket.send_json({"error": "Product not found", "product_id": product_id})
+        await websocket.close()
+        return
 
-            if quantity != last_quantity:
-                await websocket.send_json({"product_id": product_id, "quantity": quantity})
-                last_quantity = quantity
+    await websocket.send_json({"product_id": product_id, "quantity": quantity})
 
-            await asyncio.sleep(2)
-    except WebSocketDisconnect:
-        pass
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def on_notify(connection, pid, channel, payload):
+        queue.put_nowait(payload)
+
+    channel = f"product_stock_{product_id}"
+
+    async with pool.acquire() as conn:
+        await conn.add_listener(channel, on_notify)
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    await websocket.send_json(json.loads(payload))
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "keepalive"})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await conn.remove_listener(channel, on_notify)
 
 
 @router.get("/{product_id}", response_model=ProductResponse)

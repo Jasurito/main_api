@@ -104,23 +104,56 @@ async def create_product(
 
 
 @router.get("/search", response_model=ProductSearchResponse)
-async def search_products(q: str, size: int = 10):
-    body = {
-        "size": size,
-        "query": {
+async def search_products(
+    q: str | None = None,
+    category: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    in_stock: bool | None = None,
+    size: int = 10,
+):
+    must_clause = (
+        {
             "multi_match": {
                 "query": q,
                 "fields": ["name^3", "description", "category^2"],
                 "type": "best_fields",
                 "fuzziness": "AUTO",
             }
-        },
+        }
+        if q
+        else {"match_all": {}}
+    )
+
+    filters = []
+    if category:
+        filters.append({"term": {"category": category}})
+    if min_price is not None or max_price is not None:
+        price_range: dict = {}
+        if min_price is not None:
+            price_range["gte"] = min_price
+        if max_price is not None:
+            price_range["lte"] = max_price
+        filters.append({"range": {"price": price_range}})
+
+    body: dict = {
+        "size": size,
+        "query": {"bool": {"must": must_clause, "filter": filters}},
     }
 
     es = elasticsearch.get_client()
-    resp = await es.search(index="products", body=body)
+    resp = await es.search(index="products", body=body, ignore_unavailable=True)
     hits = resp["hits"]["hits"]
     total = resp["hits"]["total"]["value"]
+
+    product_ids = [h["_source"]["postgres_id"] for h in hits]
+    pool = await postgres.get_pool()
+    async with pool.acquire() as conn:
+        qty_rows = await conn.fetch(
+            "SELECT product_id, quantity FROM products WHERE product_id = ANY($1)",
+            product_ids,
+        )
+    qty_map = {r["product_id"]: r["quantity"] for r in qty_rows}
 
     results = [
         ProductResponse(
@@ -128,14 +161,15 @@ async def search_products(q: str, size: int = 10):
             name=h["_source"]["name"],
             description=h["_source"].get("description"),
             price=h["_source"]["price"],
-            quantity=h["_source"].get("quantity", 0),
+            quantity=qty_map.get(h["_source"]["postgres_id"], 0),
             category=h["_source"].get("category"),
             images=_build_image_urls(h["_source"].get("images", [])),
         )
         for h in hits
+        if in_stock is None or (qty_map.get(h["_source"]["postgres_id"], 0) > 0) == in_stock
     ]
 
-    return ProductSearchResponse(total=total, results=results)
+    return ProductSearchResponse(total=len(results), results=results)
 
 
 @router.websocket("/{product_id}/quantity")
@@ -167,12 +201,17 @@ async def product_quantity_ws(product_id: int, websocket: WebSocket):
 
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(product_id: int):
-    doc = await mongo.get_db().products.find_one({"postgres_id": product_id})
+    doc, pool = await asyncio.gather(
+        mongo.get_db().products.find_one({"postgres_id": product_id}),
+        postgres.get_pool(),
+    )
 
     if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Product not found",
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+
+    async with pool.acquire() as conn:
+        quantity = await conn.fetchval(
+            "SELECT quantity FROM products WHERE product_id = $1", product_id
         )
 
     return ProductResponse(
@@ -180,7 +219,7 @@ async def get_product(product_id: int):
         name=doc["name"],
         description=doc.get("description"),
         price=doc["price"],
-        quantity=doc.get("quantity", 0),
+        quantity=quantity or 0,
         category=doc.get("category"),
         images=_build_image_urls(doc.get("images", [])),
     )

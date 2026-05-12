@@ -29,6 +29,7 @@ services:
       KAFKA_PRODUCT_EVENTS_TOPIC: product-events
       KAFKA_CART_EVENTS_TOPIC: cart-events
       KAFKA_ORDER_EVENTS_TOPIC: order-events
+      KAFKA_FLASH_SALE_EVENTS_TOPIC: flash-sale-events
 
       JWT_SECRET_KEY: test-secret-change-later
       JWT_ALGORITHM: HS256

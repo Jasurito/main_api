@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from auth.security import bearer_scheme, decode_access_token
-from orders.schemas import CreateOrderRequest, OrderItemResponse, OrderResponse
+from orders.schemas import AdvanceOrderStatusRequest, CreateOrderRequest, OrderAddressResponse, OrderItemResponse, OrderResponse, VALID_TRANSITIONS
 from config import kafka, postgres
 
 
@@ -19,12 +19,30 @@ async def create_order(
 ):
     user_id = decode_access_token(credentials)
 
+    pool = await postgres.get_pool()
+    async with pool.acquire() as conn:
+        role = await conn.fetchval("SELECT role FROM users WHERE user_id = $1", user_id)
+        if role == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admins cannot place orders",
+            )
+
+        address = await conn.fetchrow(
+            "SELECT address_id FROM addresses WHERE address_id = $1 AND user_id = $2",
+            data.address_id,
+            user_id,
+        )
+
+    if not address:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Address not found",
+        )
+
     event = {
         "type": "order.created",
-        "data": {
-            "user_id": user_id,
-            "address_id": data.address_id,
-        },
+        "data": {"user_id": user_id, "address_id": data.address_id},
     }
 
     producer = await kafka.get_producer()
@@ -43,7 +61,14 @@ async def list_orders(
     pool = await postgres.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT order_id, status, total_amount, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC",
+            """
+            SELECT o.order_id, o.status, o.total_amount, o.created_at,
+                   a.address_id, a.street, a.city, a.apartment, a.extra_info
+            FROM orders o
+            LEFT JOIN addresses a ON a.address_id = o.address_id
+            WHERE o.user_id = $1
+            ORDER BY o.created_at DESC
+            """,
             user_id,
         )
 
@@ -53,9 +78,54 @@ async def list_orders(
             status=r["status"],
             total_amount=float(r["total_amount"] or 0),
             created_at=r["created_at"],
+            address=OrderAddressResponse(
+                address_id=r["address_id"],
+                street=r["street"],
+                city=r["city"],
+                apartment=r["apartment"],
+                extra_info=r["extra_info"],
+            ) if r["address_id"] else None,
         )
         for r in rows
     ]
+
+
+@router.patch("/{order_id}/status")
+async def advance_order_status(
+    order_id: int,
+    data: AdvanceOrderStatusRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    user_id = decode_access_token(credentials)
+
+    pool = await postgres.get_pool()
+    async with pool.acquire() as conn:
+        role = await conn.fetchval("SELECT role FROM users WHERE user_id = $1", user_id)
+        if role != "admin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+        order = await conn.fetchrow("SELECT status FROM orders WHERE order_id = $1", order_id)
+        if not order:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+        current = order["status"]
+        expected_next = VALID_TRANSITIONS.get(current)
+
+        if expected_next is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Order with status '{current}' cannot be advanced",
+            )
+
+        if data.status != expected_next:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid transition: '{current}' → '{data.status}'. Expected '{expected_next}'",
+            )
+
+        await conn.execute("UPDATE orders SET status = $1 WHERE order_id = $2", data.status, order_id)
+
+    return {"order_id": order_id, "status": data.status}
 
 
 @router.post("/{order_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -101,7 +171,13 @@ async def get_order(
     pool = await postgres.get_pool()
     async with pool.acquire() as conn:
         order = await conn.fetchrow(
-            "SELECT order_id, status, total_amount, created_at FROM orders WHERE order_id = $1 AND user_id = $2",
+            """
+            SELECT o.order_id, o.status, o.total_amount, o.created_at,
+                   a.address_id, a.street, a.city, a.apartment, a.extra_info
+            FROM orders o
+            LEFT JOIN addresses a ON a.address_id = o.address_id
+            WHERE o.order_id = $1 AND o.user_id = $2
+            """,
             order_id,
             user_id,
         )
@@ -119,6 +195,13 @@ async def get_order(
         status=order["status"],
         total_amount=float(order["total_amount"] or 0),
         created_at=order["created_at"],
+        address=OrderAddressResponse(
+            address_id=order["address_id"],
+            street=order["street"],
+            city=order["city"],
+            apartment=order["apartment"],
+            extra_info=order["extra_info"],
+        ) if order["address_id"] else None,
         items=[
             OrderItemResponse(
                 product_id=i["product_id"],

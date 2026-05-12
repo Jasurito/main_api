@@ -2,10 +2,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from addresses.routes import router as addresses_router
 from auth.routes import router as auth_router
 from cart.routes import router as cart_router
+from flash_sales.routes import router as flash_sales_router
 from orders.routes import router as orders_router
 from products.routes import router as products_router
+from reviews.routes import router as reviews_router
+from users.routes import router as users_router
 
 from config import elasticsearch, kafka, mongo, postgres, storage
 
@@ -25,9 +29,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(auth_router)
+app.include_router(addresses_router)
 app.include_router(products_router)
 app.include_router(cart_router)
 app.include_router(orders_router)
+app.include_router(flash_sales_router)
+app.include_router(reviews_router)
+app.include_router(users_router)
 
 
 @app.get("/health")

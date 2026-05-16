@@ -6,10 +6,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.security import HTTPAuthorizationCredentials
+from fastapi import Request
 
+from system_components.rate_limiter.dependencies import enforce_main_page_rate_limit
 from auth.security import bearer_scheme, decode_access_token
 from products.schemas import CreateProductResponse, ProductResponse, ProductSearchResponse
 from config import elasticsearch, kafka, mongo, postgres, redis, storage, tracing
+
 
 tracer = tracing.get_tracer()
 
@@ -107,6 +110,7 @@ async def create_product(
 
 @router.get("/search", response_model=ProductSearchResponse)
 async def search_products(
+    request: Request,
     q: str | None = None,
     category: str | None = None,
     min_price: float | None = None,
@@ -114,6 +118,9 @@ async def search_products(
     in_stock: bool | None = None,
     size: int = 10,
 ):
+
+    await enforce_main_page_rate_limit(request)
+
     must_clause = (
         {
             "multi_match": {

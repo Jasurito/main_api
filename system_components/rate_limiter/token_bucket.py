@@ -1,6 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 
 @dataclass
@@ -9,8 +10,13 @@ class BucketState:
     last_refill_at: float
 
 
-class TokenBucketRateLimiter:
+@dataclass
+class RateLimitDecision:
+    allowed: bool
+    retry_after_seconds: float
 
+
+class TokenBucketRateLimiter:
     def __init__(self, capacity: int, refill_rate_per_second: float):
         if capacity <= 0:
             raise ValueError("capacity must be greater than zero")
@@ -23,7 +29,6 @@ class TokenBucketRateLimiter:
         self._lock = asyncio.Lock()
 
     async def allow(self, key: str, tokens: int = 1) -> bool:
-
         if tokens <= 0:
             raise ValueError("tokens must be greater than zero")
 
@@ -48,7 +53,6 @@ class TokenBucketRateLimiter:
             return True
 
     async def get_retry_after_seconds(self, key: str, tokens: int = 1) -> float:
-        
         now = time.monotonic()
 
         async with self._lock:
@@ -71,3 +75,98 @@ class TokenBucketRateLimiter:
         new_tokens = elapsed_seconds * self.refill_rate_per_second
         bucket.tokens = min(self.capacity, bucket.tokens + new_tokens)
         bucket.last_refill_at = now
+
+
+class RedisTokenBucketRateLimiter:
+    _LUA_SCRIPT = """
+local key = KEYS[1]
+
+local capacity = tonumber(ARGV[1])
+local refill_rate_per_second = tonumber(ARGV[2])
+local requested_tokens = tonumber(ARGV[3])
+local ttl_ms = tonumber(ARGV[4])
+
+local redis_time = redis.call("TIME")
+local now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+
+local bucket = redis.call("HMGET", key, "tokens", "last_refill_ms")
+local tokens = tonumber(bucket[1])
+local last_refill_ms = tonumber(bucket[2])
+
+if tokens == nil or last_refill_ms == nil then
+    tokens = capacity
+    last_refill_ms = now_ms
+end
+
+local elapsed_ms = now_ms - last_refill_ms
+if elapsed_ms < 0 then
+    elapsed_ms = 0
+end
+
+local refill_tokens = (elapsed_ms / 1000.0) * refill_rate_per_second
+tokens = math.min(capacity, tokens + refill_tokens)
+last_refill_ms = now_ms
+
+local allowed = 0
+local retry_after_seconds = 0
+
+if tokens >= requested_tokens then
+    tokens = tokens - requested_tokens
+    allowed = 1
+else
+    local missing_tokens = requested_tokens - tokens
+    retry_after_seconds = missing_tokens / refill_rate_per_second
+end
+
+redis.call("HSET", key, "tokens", tostring(tokens), "last_refill_ms", tostring(last_refill_ms))
+redis.call("PEXPIRE", key, ttl_ms)
+
+return { allowed, retry_after_seconds }
+"""
+
+    def __init__(
+        self,
+        redis_client_factory: Callable[[], Awaitable[object]],
+        namespace: str,
+        capacity: int,
+        refill_rate_per_second: float,
+        state_ttl_seconds: int | None = None,
+    ):
+        if capacity <= 0:
+            raise ValueError("capacity must be greater than zero")
+        if refill_rate_per_second <= 0:
+            raise ValueError("refill_rate_per_second must be greater than zero")
+
+        self.redis_client_factory = redis_client_factory
+        self.namespace = namespace.strip(":")
+        self.capacity = capacity
+        self.refill_rate_per_second = refill_rate_per_second
+
+        if state_ttl_seconds is None:
+            state_ttl_seconds = max(60, int((capacity / refill_rate_per_second) * 2))
+
+        self.state_ttl_seconds = state_ttl_seconds
+
+    async def consume(self, key: str, tokens: int = 1) -> RateLimitDecision:
+        if tokens <= 0:
+            raise ValueError("tokens must be greater than zero")
+
+        redis_key = f"{self.namespace}:{key}"
+        ttl_ms = self.state_ttl_seconds * 1000
+
+        client = await self.redis_client_factory()
+
+        allowed, retry_after = await client.eval(
+            self._LUA_SCRIPT,
+            1,
+            redis_key,
+            self.capacity,
+            self.refill_rate_per_second,
+            tokens,
+            ttl_ms,
+        )
+
+        return RateLimitDecision(
+            allowed=bool(int(allowed)),
+            retry_after_seconds=float(retry_after),
+        )

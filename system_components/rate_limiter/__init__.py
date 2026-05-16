@@ -1,3 +1,3 @@
-from .token_bucket import TokenBucketRateLimiter
+from .token_bucket import RedisTokenBucketRateLimiter, TokenBucketRateLimiter
 
-__all__ = ["TokenBucketRateLimiter"]
+__all__ = ["RedisTokenBucketRateLimiter", "TokenBucketRateLimiter"]

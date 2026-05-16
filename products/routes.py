@@ -118,7 +118,6 @@ async def search_products(
     in_stock: bool | None = None,
     size: int = 10,
 ):
-
     await enforce_main_page_rate_limit(request)
 
     must_clause = (

@@ -11,19 +11,22 @@ from products.routes import router as products_router
 from reviews.routes import router as reviews_router
 from users.routes import router as users_router
 
-from config import elasticsearch, kafka, mongo, postgres, storage
+from config import elasticsearch, kafka, mongo, postgres, redis, storage, tracing
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    tracing.setup_tracing()
     await postgres.get_pool()
     await kafka.get_producer()
+    await redis.get_client()
     storage.ensure_bucket()
     yield
     await postgres.close_pool()
     await kafka.close_producer()
     await elasticsearch.close_client()
     await mongo.close_client()
+    await redis.close_client()
 
 
 app = FastAPI(lifespan=lifespan)

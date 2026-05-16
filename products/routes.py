@@ -9,7 +9,9 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from auth.security import bearer_scheme, decode_access_token
 from products.schemas import CreateProductResponse, ProductResponse, ProductSearchResponse
-from config import elasticsearch, kafka, mongo, postgres, storage
+from config import elasticsearch, kafka, mongo, postgres, redis, storage, tracing
+
+tracer = tracing.get_tracer()
 
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -213,25 +215,52 @@ async def product_quantity_ws(product_id: int, websocket: WebSocket):
 
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(product_id: int):
-    doc, pool = await asyncio.gather(
-        mongo.get_db().products.find_one({"postgres_id": product_id}),
-        postgres.get_pool(),
-    )
+    cache_key = f"product:{product_id}"
+    ttl = int(os.environ.get("REDIS_PRODUCT_TTL", 300))
 
-    if not doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    with tracer.start_as_current_span("get_product") as span:
+        span.set_attribute("product.id", product_id)
 
-    async with pool.acquire() as conn:
-        quantity = await conn.fetchval(
-            "SELECT quantity FROM products WHERE product_id = $1", product_id
+        r = await redis.get_client()
+
+        with tracer.start_as_current_span("cache.get"):
+            cached = await r.get(cache_key)
+
+        # If cache hit
+        if cached is not None:
+            span.set_attribute("cache.hit", True)
+            await r.expire(cache_key, ttl)
+            return ProductResponse(**json.loads(cached))
+
+        # If cache miss
+        span.set_attribute("cache.hit", False)
+
+        with tracer.start_as_current_span("mongo.find_product"):
+            doc, pool = await asyncio.gather(
+                mongo.get_db().products.find_one({"postgres_id": product_id}),
+                postgres.get_pool(),
+            )
+
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+
+        with tracer.start_as_current_span("postgres.get_quantity"):
+            async with pool.acquire() as conn:
+                quantity = await conn.fetchval(
+                    "SELECT quantity FROM products WHERE product_id = $1", product_id
+                )
+
+        product = ProductResponse(
+            product_id=doc["postgres_id"],
+            name=doc["name"],
+            description=doc.get("description"),
+            price=doc["price"],
+            quantity=quantity or 0,
+            category=doc.get("category"),
+            images=_build_image_urls(doc.get("images", [])),
         )
 
-    return ProductResponse(
-        product_id=doc["postgres_id"],
-        name=doc["name"],
-        description=doc.get("description"),
-        price=doc["price"],
-        quantity=quantity or 0,
-        category=doc.get("category"),
-        images=_build_image_urls(doc.get("images", [])),
-    )
+        with tracer.start_as_current_span("cache.set"):
+            await r.setex(cache_key, ttl, json.dumps(product.model_dump()))
+
+        return product

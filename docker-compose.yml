@@ -42,6 +42,23 @@ services:
       # client-facing URL (host-side); used to build image URLs returned to users
       STORAGE_BASE_URL: http://localhost:9000/dad-storage
 
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REDIS_PRODUCT_TTL: 300
+
+      OTEL_SERVICE_NAME: main-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=dev,service.namespace=dad
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,6 +69,10 @@ services:
       kafka:
         condition: service_healthy
       rustfs:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      tempo:
         condition: service_started
 
   worker:
@@ -178,9 +199,33 @@ services:
       - rustfs_data:/data
     command: server /data --console-address ":9001"
 
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "4317:4317"
+      - "3200:3200"
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/tmp/tempo
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres_data:
   mongo_data:
   elasticsearch_data:
   kafka_data:
   rustfs_data:
+  redis_data:
+  tempo_data:

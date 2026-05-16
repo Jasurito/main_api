@@ -39,7 +39,8 @@ deploy:
       ssh -i ~/.ssh/id_deploy "$DEPLOY_USER@$DEPLOY_HOST" "
         set -e
         printf '%s' '$DEPLOY_TOKEN_PASSWORD' | docker login '$CI_REGISTRY' -u '$DEPLOY_TOKEN_USER' --password-stdin
-        docker compose -f '$COMPOSE_FILE_PATH' pull '$COMPOSE_SERVICE'
-        docker compose -f '$COMPOSE_FILE_PATH' up -d '$COMPOSE_SERVICE'
+        docker compose -f '$COMPOSE_FILE_PATH' pull '${COMPOSE_SERVICE}'
+        docker compose -f '$COMPOSE_FILE_PATH' up -d '${COMPOSE_SERVICE}_1'
+        docker compose -f '$COMPOSE_FILE_PATH' up -d '${COMPOSE_SERVICE}_2'
         docker image prune -af --filter 'until=12h' || true
       "

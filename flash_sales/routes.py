@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from auth.security import bearer_scheme, decode_access_token
 from flash_sales.schemas import CreateFlashSaleRequest, FlashSaleResponse
 from config import kafka, postgres
+from system_components.rate_limiter.dependencies import enforce_flash_sale_purchase_rate_limit
 
 
 router = APIRouter(prefix="/flash-sales", tags=["flash-sales"])
@@ -78,6 +79,9 @@ async def buy_flash_sale(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     user_id = decode_access_token(credentials)
+
+    await enforce_flash_sale_purchase_rate_limit(user_id, flash_sale_id)
+
 
     pool = await postgres.get_pool()
     async with pool.acquire() as conn:

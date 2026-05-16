@@ -1,0 +1,45 @@
+import os
+
+from fastapi import HTTPException, status
+
+from system_components.rate_limiter import TokenBucketRateLimiter
+
+
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return int(raw)
+
+
+def _get_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return float(raw)
+
+
+flash_sale_purchase_limiter = TokenBucketRateLimiter(
+    capacity=_get_int_env("FLASH_SALE_RATE_LIMIT_CAPACITY", 3),
+    refill_rate_per_second=_get_float_env("FLASH_SALE_RATE_LIMIT_REFILL_PER_SECOND", 0.3),
+)
+
+
+async def enforce_flash_sale_purchase_rate_limit(user_id: int, flash_sale_id: int) -> None:
+    key = f"flash_sale:{flash_sale_id}:user:{user_id}"
+
+    allowed = await flash_sale_purchase_limiter.allow(key)
+
+    if allowed:
+        return
+
+    retry_after = await flash_sale_purchase_limiter.get_retry_after_seconds(key)
+
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "message": "Too many flash sale purchase attempts. Please try again later.",
+            "retry_after_seconds": round(retry_after, 2),
+        },
+        headers={"Retry-After": str(max(1, round(retry_after)))},
+    )

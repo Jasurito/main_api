@@ -79,17 +79,25 @@ class TokenBucketRateLimiter:
 
 class RedisTokenBucketRateLimiter:
     _LUA_SCRIPT = """
-local key = KEYS[1]
+local bucket_key = KEYS[1]
+local block_key = KEYS[2]
 
 local capacity = tonumber(ARGV[1])
 local refill_rate_per_second = tonumber(ARGV[2])
 local requested_tokens = tonumber(ARGV[3])
 local ttl_ms = tonumber(ARGV[4])
+local block_ttl_ms = tonumber(ARGV[5])
+
+local blocked = redis.call("PTTL", block_key)
+
+if blocked > 0 then
+    return { 0, blocked / 1000.0, 1 }
+end
 
 local redis_time = redis.call("TIME")
 local now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
 
-local bucket = redis.call("HMGET", key, "tokens", "last_refill_ms")
+local bucket = redis.call("HMGET", bucket_key, "tokens", "last_refill_ms")
 local tokens = tonumber(bucket[1])
 local last_refill_ms = tonumber(bucket[2])
 
@@ -109,19 +117,21 @@ last_refill_ms = now_ms
 
 local allowed = 0
 local retry_after_seconds = 0
+local is_blocked = 0
 
 if tokens >= requested_tokens then
     tokens = tokens - requested_tokens
     allowed = 1
 else
-    local missing_tokens = requested_tokens - tokens
-    retry_after_seconds = missing_tokens / refill_rate_per_second
+    redis.call("SET", block_key, "1", "PX", block_ttl_ms)
+    retry_after_seconds = block_ttl_ms / 1000.0
+    is_blocked = 1
 end
 
-redis.call("HSET", key, "tokens", tostring(tokens), "last_refill_ms", tostring(last_refill_ms))
-redis.call("PEXPIRE", key, ttl_ms)
+redis.call("HSET", bucket_key, "tokens", tostring(tokens), "last_refill_ms", tostring(last_refill_ms))
+redis.call("PEXPIRE", bucket_key, ttl_ms)
 
-return { allowed, retry_after_seconds }
+return { allowed, retry_after_seconds, is_blocked }
 """
 
     def __init__(
@@ -131,11 +141,14 @@ return { allowed, retry_after_seconds }
         capacity: int,
         refill_rate_per_second: float,
         state_ttl_seconds: int | None = None,
+        block_ttl_seconds: int = 10,
     ):
         if capacity <= 0:
             raise ValueError("capacity must be greater than zero")
         if refill_rate_per_second <= 0:
             raise ValueError("refill_rate_per_second must be greater than zero")
+        if block_ttl_seconds <= 0:
+            raise ValueError("block_ttl_seconds must be greater than zero")
 
         self.redis_client_factory = redis_client_factory
         self.namespace = namespace.strip(":")
@@ -146,24 +159,30 @@ return { allowed, retry_after_seconds }
             state_ttl_seconds = max(60, int((capacity / refill_rate_per_second) * 2))
 
         self.state_ttl_seconds = state_ttl_seconds
+        self.block_ttl_seconds = block_ttl_seconds
 
     async def consume(self, key: str, tokens: int = 1) -> RateLimitDecision:
         if tokens <= 0:
             raise ValueError("tokens must be greater than zero")
 
-        redis_key = f"{self.namespace}:{key}"
+        bucket_key = f"{self.namespace}:bucket:{key}"
+        block_key = f"{self.namespace}:blocked:{key}"
+
         ttl_ms = self.state_ttl_seconds * 1000
+        block_ttl_ms = self.block_ttl_seconds * 1000
 
         client = await self.redis_client_factory()
 
-        allowed, retry_after = await client.eval(
+        allowed, retry_after, _ = await client.eval(
             self._LUA_SCRIPT,
-            1,
-            redis_key,
+            2,
+            bucket_key,
+            block_key,
             self.capacity,
             self.refill_rate_per_second,
             tokens,
             ttl_ms,
+            block_ttl_ms,
         )
 
         return RateLimitDecision(

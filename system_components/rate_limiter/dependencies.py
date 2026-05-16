@@ -52,6 +52,7 @@ main_page_limiter = RedisTokenBucketRateLimiter(
     capacity=_get_int_env("MAIN_PAGE_RATE_LIMIT_CAPACITY", 10),
     refill_rate_per_second=_get_float_env("MAIN_PAGE_RATE_LIMIT_REFILL_PER_SECOND", 2.0),
     state_ttl_seconds=_get_int_env("MAIN_PAGE_RATE_LIMIT_STATE_TTL_SECONDS", 60),
+    block_ttl_seconds=_get_int_env("MAIN_PAGE_RATE_LIMIT_BLOCK_SECONDS", 10),
 )
 
 

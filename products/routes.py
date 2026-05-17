@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 import os
 import uuid
 
@@ -15,7 +16,7 @@ from config import elasticsearch, kafka, mongo, postgres, redis, storage, tracin
 
 
 tracer = tracing.get_tracer()
-
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -226,20 +227,21 @@ async def get_product(product_id: int):
 
     with tracer.start_as_current_span("get_product") as span:
         span.set_attribute("product.id", product_id)
+        logger.info("get_product started", extra={"product_id": product_id})
 
         r = await redis.get_client()
 
         with tracer.start_as_current_span("cache.get"):
             cached = await r.get(cache_key)
 
-        # If cache hit
         if cached is not None:
             span.set_attribute("cache.hit", True)
+            logger.info("cache hit", extra={"product_id": product_id})
             await r.expire(cache_key, ttl)
             return ProductResponse(**json.loads(cached))
 
-        # If cache miss
         span.set_attribute("cache.hit", False)
+        logger.info("cache miss, fetching from MongoDB and Postgres", extra={"product_id": product_id})
 
         with tracer.start_as_current_span("mongo.find_product"):
             doc, pool = await asyncio.gather(
@@ -248,6 +250,7 @@ async def get_product(product_id: int):
             )
 
         if not doc:
+            logger.warning("product not found", extra={"product_id": product_id})
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
         with tracer.start_as_current_span("postgres.get_quantity"):
@@ -255,6 +258,8 @@ async def get_product(product_id: int):
                 quantity = await conn.fetchval(
                     "SELECT quantity FROM products WHERE product_id = $1", product_id
                 )
+
+        logger.info("fetched product", extra={"product_id": product_id, "quantity": quantity})
 
         product = ProductResponse(
             product_id=doc["postgres_id"],
@@ -269,4 +274,5 @@ async def get_product(product_id: int):
         with tracer.start_as_current_span("cache.set"):
             await r.setex(cache_key, ttl, json.dumps(product.model_dump()))
 
+        logger.info("product stored in cache", extra={"product_id": product_id, "ttl": ttl})
         return product

@@ -118,6 +118,13 @@ services:
       kafka:
         condition: service_healthy
 
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
   payful:
     build: ../payful
     environment:

@@ -47,11 +47,6 @@ services:
       REDIS_DB: 0
       REDIS_PRODUCT_TTL: 300
 
-      MAIN_PAGE_RATE_LIMIT_CAPACITY: 10
-      MAIN_PAGE_RATE_LIMIT_REFILL_PER_SECOND: 2.0
-      MAIN_PAGE_RATE_LIMIT_STATE_TTL_SECONDS: 60
-      MAIN_PAGE_RATE_LIMIT_BLOCK_SECONDS: 10  
-
       OTEL_SERVICE_NAME: main-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
@@ -121,6 +116,19 @@ services:
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+
+  payful:
+    build: ../payful
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: daddb
+      POSTGRES_USER: daduser
+      POSTGRES_PASSWORD: dadpass
+      ADVANCE_INTERVAL_SECONDS: 30
+    depends_on:
+      postgres:
         condition: service_healthy
 
   postgres:
